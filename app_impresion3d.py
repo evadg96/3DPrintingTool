@@ -25,13 +25,13 @@ class App3D(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Gestor de Impresión 3D")
-        self.geometry("900x700")
+        self.geometry("900x720")
         ctk.set_appearance_mode("dark")
         
         self.data = self.load_data()
         
         # Sistema de Pestañas
-        self.tabview = ctk.CTkTabview(self, width=850, height=640)
+        self.tabview = ctk.CTkTabview(self, width=850, height=660)
         self.tabview.pack(padx=20, pady=20)
         
         self.tab_calc = self.tabview.add("Calculadora")
@@ -59,7 +59,11 @@ class App3D(ctk.CTk):
 
     # --- PESTAÑA: CALCULADORA ---
     def build_calculadora(self):
-        ctk.CTkLabel(self.tab_calc, text="Nueva Impresión", font=("Arial", 20, "bold")).pack(pady=10)
+        ctk.CTkLabel(self.tab_calc, text="Nueva Impresión / Simulador", font=("Arial", 20, "bold")).pack(pady=10)
+        
+        # Nombre del artículo (Opcional)
+        self.calc_nombre = ctk.CTkEntry(self.tab_calc, placeholder_text="Nombre del artículo o proyecto (opcional)", width=400)
+        self.calc_nombre.pack(pady=5)
         
         ctk.CTkLabel(self.tab_calc, text="Selecciona el filamento a utilizar:").pack(pady=(5, 0))
         lista_inicial = self.get_filamentos_list()
@@ -82,8 +86,12 @@ class App3D(ctk.CTk):
         self.lbl_resultado = ctk.CTkLabel(self.tab_calc, text="Coste Total: 0.00 €", font=("Arial", 16, "bold"))
         self.lbl_resultado.pack(pady=15)
         
-        ctk.CTkButton(self.tab_calc, text="Calcular Coste", command=self.calcular_coste).pack(pady=5)
-        ctk.CTkButton(self.tab_calc, text="Guardar e Imprimir (Descontar Stock)", fg_color="green", command=self.guardar_impresion).pack(pady=5)
+        # Botones separados para simular y para guardar de verdad
+        btn_frame = ctk.CTkFrame(self.tab_calc, fg_color="transparent")
+        btn_frame.pack(pady=10)
+        
+        ctk.CTkButton(btn_frame, text="Calcular Coste", fg_color="blue", command=self.calcular_coste).pack(side="left", padx=10)
+        ctk.CTkButton(btn_frame, text="Guardar en el Historial (Descontar Stock)", fg_color="green", command=self.guardar_impresion).pack(side="left", padx=10)
 
     # --- PESTAÑA: FILAMENTOS ---
     def build_filamentos(self):
@@ -203,11 +211,9 @@ class App3D(ctk.CTk):
             if not marca:
                 return
             
-            # Recoger Tipo unificado
             tipo = self.fil_tipo_custom.get().strip() if self.fil_tipo_var.get() == "Otro..." else self.fil_tipo_var.get()
             if not tipo: tipo = "PLA"
 
-            # Recoger Color
             color = self.fil_color_custom.get().strip() if self.fil_color_var.get() == "Otro..." else self.fil_color_var.get()
             if not color: color = "Desconocido"
 
@@ -227,13 +233,11 @@ class App3D(ctk.CTk):
             self.save_data()
             self.actualizar_vista_stock()
             
-            # Actualizar menú de la calculadora
             nueva_lista = self.get_filamentos_list()
             self.menu_filamentos.configure(values=nueva_lista)
             if nueva_lista:
                 self.calc_fil_var.set(nueva_lista[0])
             
-            # Limpiar campos de texto y resetear campos ocultos
             self.fil_marca.delete(0, 'end')
             self.fil_peso.delete(0, 'end')
             self.fil_precio.delete(0, 'end')
@@ -252,7 +256,6 @@ class App3D(ctk.CTk):
             self.save_data()
             self.actualizar_vista_stock()
             
-            # Actualizar y limpiar el selector de la calculadora
             nueva_lista = self.get_filamentos_list()
             if nueva_lista:
                 self.menu_filamentos.configure(values=nueva_lista)
@@ -294,7 +297,8 @@ class App3D(ctk.CTk):
             card = ctk.CTkFrame(self.scroll_hist)
             card.pack(pady=4, padx=5, fill="x", expand=True)
             
-            info_text = f"{h['fecha']}  |  {h['filamento']}  |  {h['gramos']}g  |  {h['tiempo']}  |  Coste: {h['coste_total']:.2f}€"
+            nombre_articulo = f"[{h.get('nombre', 'Sin nombre')}] " if h.get('nombre') else ""
+            info_text = f"{h['fecha']}  |  {nombre_articulo}{h['filamento']}  |  {h['gramos']}g  |  {h['tiempo']}  |  Coste: {h['coste_total']:.2f}€"
             lbl = ctk.CTkLabel(card, text=info_text, anchor="w", font=("Arial", 12))
             lbl.pack(side="left", padx=10, pady=8, fill="x", expand=True)
             
@@ -363,17 +367,22 @@ class App3D(ctk.CTk):
             return False
 
     def guardar_impresion(self):
+        # Primero aseguramos que el cálculo es válido y está actualizado
         if self.calcular_coste():
             fil_seleccionado = self.calc_fil_var.get()
             fil_str = fil_seleccionado.split(" - ")[0]
             gramos = float(self.calc_gramos.get())
+            nombre_articulo = self.calc_nombre.get().strip()
             
+            # Restar stock
             self.data["filamentos"][fil_str]["restante"] -= gramos
             if self.data["filamentos"][fil_str]["restante"] < 0:
                 self.data["filamentos"][fil_str]["restante"] = 0
             
+            # Guardar en historial con el nombre opcional
             self.data["historial"].append({
                 "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "nombre": nombre_articulo,
                 "filamento": fil_str,
                 "gramos": gramos,
                 "tiempo": f"{self.calc_horas.get() or 0}h {self.calc_mins.get() or 0}m",
@@ -384,7 +393,10 @@ class App3D(ctk.CTk):
             self.actualizar_vista_stock()
             self.actualizar_vista_historial()
             self.menu_filamentos.configure(values=self.get_filamentos_list())
-            self.lbl_resultado.configure(text="¡Impresión guardada y stock descontado!")
+            
+            # Limpiar nombre tras guardar con éxito
+            self.calc_nombre.delete(0, 'end')
+            self.lbl_resultado.configure(text="¡Impresión guardada en el historial y stock descontado!")
 
 if __name__ == "__main__":
     app = App3D()
