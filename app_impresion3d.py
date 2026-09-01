@@ -27,13 +27,13 @@ class App3D(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Gestor de Impresión 3D Pro")
-        self.geometry("1000x780")
+        self.geometry("1000x800")
         ctk.set_appearance_mode("dark")
         
         self.data = self.load_data()
         
-        # Sistema de Pestañas (Añadida pestaña "Estadísticas")
-        self.tabview = ctk.CTkTabview(self, width=950, height=710)
+        # Sistema de Pestañas
+        self.tabview = ctk.CTkTabview(self, width=950, height=730)
         self.tabview.pack(padx=20, pady=20)
         
         self.tab_calc = self.tabview.add("Calculadora")
@@ -179,7 +179,7 @@ class App3D(ctk.CTk):
         main_ped_frame = ctk.CTkFrame(self.tab_pedidos, fg_color="transparent")
         main_ped_frame.pack(fill="both", expand=True, padx=5, pady=5)
         
-        # --- BLOQUE IZQUIERDO: CLIENTES (CAMPOS OPCIONALES + DIRECCIÓN) ---
+        # --- BLOQUE IZQUIERDO: CLIENTES ---
         left_frame = ctk.CTkFrame(main_ped_frame, width=320)
         left_frame.pack(side="left", fill="y", padx=5, pady=5)
         
@@ -209,34 +209,29 @@ class App3D(ctk.CTk):
         form_ped = ctk.CTkFrame(right_frame, fg_color="transparent")
         form_ped.pack(fill="x", padx=10, pady=5)
         
-        # Selector Cliente
         ctk.CTkLabel(form_ped, text="Cliente:").grid(row=0, column=0, sticky="w", pady=3)
         clientes_list = list(self.data["clientes"].keys())
         self.ped_cli_var = ctk.StringVar(value=clientes_list[0] if clientes_list else "Sin clientes")
         self.menu_ped_cli = ctk.CTkOptionMenu(form_ped, variable=self.ped_cli_var, values=clientes_list or ["Sin clientes"])
         self.menu_ped_cli.grid(row=0, column=1, sticky="ew", pady=3, padx=5)
         
-        # Selector Historial / Impresión asociada
         ctk.CTkLabel(form_ped, text="Impresión asociada:").grid(row=1, column=0, sticky="w", pady=3)
         hist_list = [f"[{h.get('fecha','')}] {h.get('nombre','Pieza')} ({h.get('coste_total',0):.2f}€)" for h in self.data["historial"]]
         self.ped_hist_var = ctk.StringVar(value=hist_list[0] if hist_list else "No hay historial")
         self.menu_ped_hist = ctk.CTkOptionMenu(form_ped, variable=self.ped_hist_var, values=hist_list or ["No hay historial"])
         self.menu_ped_hist.grid(row=1, column=1, sticky="ew", pady=3, padx=5)
         
-        # Precio del producto a mano
         ctk.CTkLabel(form_ped, text="Precio Producto (€):").grid(row=2, column=0, sticky="w", pady=3)
         self.ped_precio_prod = ctk.CTkEntry(form_ped, placeholder_text="0.00")
         self.ped_precio_prod.grid(row=2, column=1, sticky="ew", pady=3, padx=5)
         self.ped_precio_prod.bind("<KeyRelease>", lambda e: self.calcular_total_pedido())
 
-        # Gastos de envío a mano
         ctk.CTkLabel(form_ped, text="Gastos de Envío (€):").grid(row=3, column=0, sticky="w", pady=3)
         self.ped_envio = ctk.CTkEntry(form_ped, placeholder_text="0.00")
         self.ped_envio.insert(0, "0.00")
         self.ped_envio.grid(row=3, column=1, sticky="ew", pady=3, padx=5)
         self.ped_envio.bind("<KeyRelease>", lambda e: self.calcular_total_pedido())
 
-        # Total a cobrar (Automático)
         ctk.CTkLabel(form_ped, text="Total a Cobrar (€):", font=("Arial", 12, "bold")).grid(row=4, column=0, sticky="w", pady=5)
         self.lbl_ped_total = ctk.CTkLabel(form_ped, text="0.00 €", font=("Arial", 14, "bold"), text_color="lightgreen")
         self.lbl_ped_total.grid(row=4, column=1, sticky="w", pady=5, padx=5)
@@ -266,7 +261,6 @@ class App3D(ctk.CTk):
         self.stats_frame = ctk.CTkFrame(self.tab_stats, fg_color="transparent")
         self.stats_frame.pack(fill="both", expand=True, padx=20, pady=10)
         
-        # Botón para actualizar estadísticas manualmente (también se actualiza al entrar)
         ctk.CTkButton(self.tab_stats, text="Actualizar Datos", fg_color="blue", command=self.actualizar_vista_estadisticas).pack(pady=10)
         
         self.actualizar_vista_estadisticas()
@@ -274,30 +268,46 @@ class App3D(ctk.CTk):
     def actualizar_vista_estadisticas(self):
         for widget in self.stats_frame.winfo_children(): widget.destroy()
         
-        # Cálculos de negocio basados en pedidos e historial
         ingresos_productos = 0.0
         costes_produccion = 0.0
         total_envios = 0.0
         
-        # Mapear historial por texto o índice para cruzar costes
+        # Diccionario para contar la demanda de filamentos (por gramos y por usos)
+        demanda_filamentos = {}
+        
         historial_map = {}
         for h in self.data["historial"]:
             key = f"[{h.get('fecha','')}] {h.get('nombre','Pieza')} ({h.get('coste_total',0):.2f}€)"
-            historial_map[key] = h.get('coste_total', 0.0)
+            historial_map[key] = h
             
         for p in self.data["pedidos"]:
             ingresos_productos += p.get('precio_prod', 0.0)
             total_envios += p.get('envio', 0.0)
             
-            # Buscar el coste de la impresión asociada
             ref_impresion = p.get('impresion', '')
             if ref_impresion in historial_map:
-                costes_produccion += historial_map[ref_impresion]
+                h_data = historial_map[ref_impresion]
+                costes_produccion += h_data.get('coste_total', 0.0)
+                
+                # Registrar consumo de filamento basado en los pedidos
+                fil_usado = h_data.get('filamento', 'Desconocido')
+                gramos_usados = h_data.get('gramos', 0.0)
+                if fil_usado not in demanda_filamentos:
+                    demanda_filamentos[fil_usado] = {"usos": 0, "gramos": 0.0}
+                demanda_filamentos[fil_usado]["usos"] += 1
+                demanda_filamentos[fil_usado]["gramos"] += gramos_usados
 
-        beneficio_neto = ingresos_productos - costes_produccion
+        # Si no hay pedidos pero sí historial, podemos también tenerlo en cuenta de forma general,
+        # pero basarlo en pedidos refleja la demanda real de venta. Si prefieres general de todo el historial, dímelo.
         
-        # Margen de beneficio general: (Beneficio / Ingresos) * 100
+        beneficio_neto = ingresos_productos - costes_produccion
         margen_porcentaje = (beneficio_neto / ingresos_productos * 100) if ingresos_productos > 0 else 0.0
+
+        # Determinar filamento más demandado
+        filamento_top = "Ninguno registrado"
+        if demanda_filamentos:
+            top_key = max(demanda_filamentos, key=lambda k: demanda_filamentos[k]["gramos"])
+            filamento_top = f"{top_key}\n({demanda_filamentos[top_key]['gramos']:.1f}g en {demanda_filamentos[top_key]['usos']} pedidos)"
 
         # --- TARJETAS VISUALES DE ESTADÍSTICAS ---
         card_config = [
@@ -305,7 +315,7 @@ class App3D(ctk.CTk):
             ("Costes Totales de Producción", f"{costes_produccion:.2f} €", "salmon"),
             ("Beneficio Neto del Negocio", f"{beneficio_neto:.2f} €", "lightgreen" if beneficio_neto >= 0 else "red"),
             ("Margen de Beneficio General", f"{margen_porcentaje:.1f} %", "orange" if margen_porcentaje < 30 else "gold"),
-            ("Total Gastos de Envío Cobrados", f"{total_envios:.2f} €", "gray"),
+            ("Filamento Más Demandado", filamento_top, "cyan"),
             ("Pedidos Totales Realizados", f"{len(self.data['pedidos'])} pedidos", "purple")
         ]
 
@@ -314,10 +324,10 @@ class App3D(ctk.CTk):
             col = i % 2
             
             card = ctk.CTkFrame(self.stats_frame, corner_radius=10)
-            card.grid(row=row, column=col, padx=15, pady=15, sticky="nsew", ipadx=10, ipady=10)
+            card.grid(row=row, column=col, padx=15, pady=12, sticky="nsew", ipadx=10, ipady=10)
             
             ctk.CTkLabel(card, text=titulo, font=("Arial", 14, "bold")).pack(pady=(10, 5))
-            ctk.CTkLabel(card, text=valor, font=("Arial", 22, "bold"), text_color=color).pack(pady=(5, 10))
+            ctk.CTkLabel(card, text=valor, font=("Arial", 18, "bold"), text_color=color).pack(pady=(5, 10))
 
         self.stats_frame.grid_columnconfigure(0, weight=1)
         self.stats_frame.grid_columnconfigure(1, weight=1)
@@ -475,7 +485,6 @@ class App3D(ctk.CTk):
         for cli, info in self.data["clientes"].items():
             card = ctk.CTkFrame(self.scroll_clientes)
             card.pack(pady=3, padx=2, fill="x", expand=True)
-            
             detalles = f"Tel: {info.get('telefono','-')} | Dir: {info.get('direccion','-')}"
             ctk.CTkLabel(card, text=f"{cli}\n{detalles}", anchor="w", font=("Arial", 10)).pack(side="left", padx=5, pady=5, fill="x", expand=True)
             ctk.CTkButton(card, text="X", width=30, fg_color="red", command=lambda c=cli: self.eliminar_cliente(c)).pack(side="right", padx=5)
