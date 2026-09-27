@@ -8,7 +8,6 @@ USER_DIR = os.path.expanduser("~/Documents/Gestor3D")
 os.makedirs(USER_DIR, exist_ok=True)
 DATA_FILE = os.path.join(USER_DIR, "impresiones_data.json")
 
-# Datos por defecto ampliados
 DEFAULT_DATA = {
     "filamentos": {},
     "historial": [],
@@ -17,8 +16,8 @@ DEFAULT_DATA = {
     "config": {
         "precio_kwh": 0.15,
         "consumo_watts": 65,
-        "consumo_pico_watts": 350,   # Consumo pico durante precalentamiento de cama/boquilla
-        "mins_preparacion": 6,        # Minutos de autocalibración + calentamiento por placa
+        "consumo_pico_watts": 350,
+        "mins_preparacion": 6,
         "precio_impresora": 400,
         "horas_vida": 5000,
         "margen_beneficio": 0
@@ -33,7 +32,13 @@ class App3D(ctk.CTk):
         ctk.set_appearance_mode("dark")
         
         self.data = self.load_data()
-        self.placas_widgets = [] # Almacena las estructuras de la calculadora
+        self.placas_widgets = []
+        
+        # Modos de edición activa
+        self.editing_filamento_id = None
+        self.editing_cliente_name = None
+        self.editing_pedido_index = None
+        self.editing_historial_index = None
         
         # Sistema de Pestañas
         self.tabview = ctk.CTkTabview(self, width=1000, height=800)
@@ -218,17 +223,26 @@ class App3D(ctk.CTk):
         self.fil_peso = ctk.CTkEntry(form_frame, placeholder_text="Peso total (g, ej. 1000)*")
         self.fil_peso.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
         
+        self.fil_disponible = ctk.CTkEntry(form_frame, placeholder_text="Gramos disp. (opcional)")
+        self.fil_disponible.grid(row=2, column=2, padx=5, pady=5, sticky="ew")
+        
         self.fil_precio = ctk.CTkEntry(form_frame, placeholder_text="Precio (€, ej. 19.99)*")
-        self.fil_precio.grid(row=2, column=2, padx=5, pady=5, sticky="ew")
+        self.fil_precio.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
         
         form_frame.grid_columnconfigure(0, weight=1)
         form_frame.grid_columnconfigure(1, weight=1)
         form_frame.grid_columnconfigure(2, weight=1)
 
-        ctk.CTkButton(form_frame, text="Añadir Nuevo Rollo", fg_color="green", command=self.add_filamento).grid(row=3, column=0, columnspan=3, pady=8, sticky="ew")
-        
+        btn_box = ctk.CTkFrame(form_frame, fg_color="transparent")
+        btn_box.grid(row=4, column=0, columnspan=3, pady=8, sticky="ew")
+
+        self.btn_save_fil = ctk.CTkButton(btn_box, text="Añadir Nuevo Rollo", fg_color="green", command=self.add_filamento)
+        self.btn_save_fil.pack(side="left", fill="x", expand=True, padx=2)
+
+        self.btn_cancel_fil = ctk.CTkButton(btn_box, text="Cancelar Edición", fg_color="gray40", command=self.cancel_edit_filamento)
+
         self.lbl_fil_msg = ctk.CTkLabel(form_frame, text="", font=("Arial", 12))
-        self.lbl_fil_msg.grid(row=4, column=0, columnspan=3, pady=(0, 5))
+        self.lbl_fil_msg.grid(row=5, column=0, columnspan=3, pady=(0, 5))
 
         search_frame = ctk.CTkFrame(self.tab_fil, fg_color="transparent")
         search_frame.pack(pady=5, padx=10, fill="x")
@@ -254,62 +268,50 @@ class App3D(ctk.CTk):
         else:
             self.fil_color_custom.grid_forget()
 
-    def add_filamento(self):
-        marca = self.fil_marca.get().strip()
-        if not marca:
-            self.lbl_fil_msg.configure(text="❌ Error: Debes indicar la marca del filamento.", text_color="red")
-            return
-
-        if self.fil_tipo_var.get() == "Otro...":
-            tipo = self.fil_tipo_custom.get().strip()
-            if not tipo:
-                self.lbl_fil_msg.configure(text="❌ Error: Escribe el tipo personalizado.", text_color="red")
-                return
-        else:
-            tipo = self.fil_tipo_var.get()
-
-        if self.fil_color_var.get() == "Otro...":
-            color = self.fil_color_custom.get().strip()
-            if not color:
-                self.lbl_fil_msg.configure(text="❌ Error: Escribe el color personalizado.", text_color="red")
-                return
-        else:
-            color = self.fil_color_var.get()
-
-        try:
-            peso_str = self.fil_peso.get().strip().replace(',', '.')
-            peso_inicial = float(peso_str)
-            if peso_inicial <= 0: raise ValueError
-        except ValueError:
-            self.lbl_fil_msg.configure(text="❌ Error: El peso debe ser un número válido mayor a 0 (ej. 1000).", text_color="red")
-            return
-
-        try:
-            precio_str = self.fil_precio.get().strip().replace(',', '.')
-            precio = float(precio_str)
-            if precio < 0: raise ValueError
-        except ValueError:
-            self.lbl_fil_msg.configure(text="❌ Error: El precio debe ser un número válido (ej. 19.99).", text_color="red")
-            return
-
-        id_fil = f"{marca} {tipo} ({color})"
+    def edit_filamento(self, id_fil):
+        v = self.data["filamentos"][id_fil]
+        self.editing_filamento_id = id_fil
         
-        self.data["filamentos"][id_fil] = {
-            "marca": marca, 
-            "tipo": tipo, 
-            "color": color, 
-            "acabado": self.fil_acabado.get(),
-            "peso_inicial": peso_inicial, 
-            "restante": peso_inicial, 
-            "precio": precio
-        }
+        self.fil_marca.delete(0, 'end')
+        self.fil_marca.insert(0, v['marca'])
         
-        self.save_data()
-        self.actualizar_vista_stock()
-        self.update_all_filamentos_menus()
+        if v['tipo'] in ["PLA", "PETG", "ABS", "TPU", "ASA"]:
+            self.fil_tipo_var.set(v['tipo'])
+            self.fil_tipo_custom.grid_forget()
+        else:
+            self.fil_tipo_var.set("Otro...")
+            self.fil_tipo_custom.grid(row=1, column=1, padx=5, pady=2, sticky="ew")
+            self.fil_tipo_custom.delete(0, 'end')
+            self.fil_tipo_custom.insert(0, v['tipo'])
 
+        if v['color'] in ["Negro", "Blanco", "Gris", "Rojo", "Azul", "Verde", "Amarillo", "Naranja", "Rosa", "Morado", "Transparente", "Marmol", "Madera", "Plateado", "Dorado"]:
+            self.fil_color_var.set(v['color'])
+            self.fil_color_custom.grid_forget()
+        else:
+            self.fil_color_var.set("Otro...")
+            self.fil_color_custom.grid(row=1, column=2, padx=5, pady=2, sticky="ew")
+            self.fil_color_custom.delete(0, 'end')
+            self.fil_color_custom.insert(0, v['color'])
+
+        self.fil_acabado.set(v.get('acabado', 'Mate'))
+        
+        self.fil_peso.delete(0, 'end')
+        self.fil_peso.insert(0, str(v['peso_inicial']))
+
+        self.fil_disponible.delete(0, 'end')
+        self.fil_disponible.insert(0, str(v.get('restante', v['peso_inicial'])))
+        
+        self.fil_precio.delete(0, 'end')
+        self.fil_precio.insert(0, str(v['precio']))
+
+        self.btn_save_fil.configure(text="Guardar Cambios en Filamento", fg_color="orange")
+        self.btn_cancel_fil.pack(side="right", padx=2)
+
+    def cancel_edit_filamento(self):
+        self.editing_filamento_id = None
         self.fil_marca.delete(0, 'end')
         self.fil_peso.delete(0, 'end')
+        self.fil_disponible.delete(0, 'end')
         self.fil_precio.delete(0, 'end')
         self.fil_tipo_custom.delete(0, 'end')
         self.fil_color_custom.delete(0, 'end')
@@ -319,11 +321,91 @@ class App3D(ctk.CTk):
         self.fil_color_var.set("Negro")
         self.fil_acabado.set("Mate")
 
-        self.lbl_fil_msg.configure(text=f"✅ ¡Rollo '{id_fil}' añadido correctamente!", text_color="lightgreen")
+        self.btn_save_fil.configure(text="Añadir Nuevo Rollo", fg_color="green")
+        self.btn_cancel_fil.pack_forget()
+
+    def add_filamento(self):
+        marca = self.fil_marca.get().strip()
+        if not marca:
+            self.lbl_fil_msg.configure(text="❌ Error: Debes indicar la marca del filamento.", text_color="red")
+            return
+
+        tipo = self.fil_tipo_custom.get().strip() if self.fil_tipo_var.get() == "Otro..." else self.fil_tipo_var.get()
+        color = self.fil_color_custom.get().strip() if self.fil_color_var.get() == "Otro..." else self.fil_color_var.get()
+
+        try:
+            peso_inicial = float(self.fil_peso.get().strip().replace(',', '.'))
+            precio = float(self.fil_precio.get().strip().replace(',', '.'))
+            if peso_inicial <= 0 or precio < 0: raise ValueError
+        except ValueError:
+            self.lbl_fil_msg.configure(text="❌ Error: Revisa peso total y precio.", text_color="red")
+            return
+
+        disp_str = self.fil_disponible.get().strip().replace(',', '.')
+        if disp_str:
+            try:
+                restante = float(disp_str)
+                if restante < 0: restante = 0.0
+            except ValueError:
+                self.lbl_fil_msg.configure(text="❌ Error: El peso disponible debe ser un número.", text_color="red")
+                return
+        else:
+            restante = peso_inicial
+
+        new_id_fil = f"{marca} {tipo} ({color})"
+        
+        if self.editing_filamento_id:
+            old_id = self.editing_filamento_id
+            
+            # Si cambió de nombre, actualizamos en cascada el historial de impresiones
+            if old_id != new_id_fil:
+                del self.data["filamentos"][old_id]
+                for h in self.data["historial"]:
+                    if h.get("filamento") == old_id:
+                        h["filamento"] = new_id_fil
+                    for item in h.get("desglose_filamentos", []):
+                        if item["filamento"] == old_id:
+                            item["filamento"] = new_id_fil
+            
+            self.data["filamentos"][new_id_fil] = {
+                "marca": marca, "tipo": tipo, "color": color, 
+                "acabado": self.fil_acabado.get(),
+                "peso_inicial": peso_inicial, 
+                "restante": restante, 
+                "precio": precio
+            }
+            self.lbl_fil_msg.configure(text="✅ ¡Filamento actualizado en cascada!", text_color="lightgreen")
+            self.cancel_edit_filamento()
+        else:
+            self.data["filamentos"][new_id_fil] = {
+                "marca": marca, "tipo": tipo, "color": color, 
+                "acabado": self.fil_acabado.get(),
+                "peso_inicial": peso_inicial, "restante": restante, "precio": precio
+            }
+            self.lbl_fil_msg.configure(text=f"✅ ¡Rollo '{new_id_fil}' añadido!", text_color="lightgreen")
+            self.cancel_edit_filamento()
+
+        self.save_data()
+        self.actualizar_vista_stock()
+        self.actualizar_vista_historial()
+        self.actualizar_vista_estadisticas()
+        self.update_all_filamentos_menus()
         self.after(3000, lambda: self.lbl_fil_msg.configure(text=""))
+
+    def ajustar_gramos_rapido(self, id_fil, entry_widget):
+        try:
+            nuevo_peso = float(entry_widget.get().strip().replace(',', '.'))
+            if nuevo_peso < 0: nuevo_peso = 0.0
+            self.data["filamentos"][id_fil]["restante"] = nuevo_peso
+            self.save_data()
+            self.actualizar_vista_stock()
+            self.update_all_filamentos_menus()
+        except ValueError:
+            pass
 
     # --- PESTAÑA: HISTORIAL ---
     def build_historial(self):
+        for w in self.tab_hist.winfo_children(): w.destroy()
         ctk.CTkLabel(self.tab_hist, text="Historial de Impresiones y Proyectos", font=("Arial", 18, "bold")).pack(pady=5)
         
         self.scroll_hist = ctk.CTkScrollableFrame(self.tab_hist, width=910, height=520)
@@ -331,7 +413,7 @@ class App3D(ctk.CTk):
         
         self.actualizar_vista_historial()
 
-    # --- PESTAÑA: PEDIDOS / CLIENTES (AJUSTE TIENDA EN EL PEDIDO) ---
+    # --- PESTAÑA: PEDIDOS / CLIENTES ---
     def build_pedidos(self):
         for w in self.tab_pedidos.winfo_children(): w.destroy()
 
@@ -344,7 +426,9 @@ class App3D(ctk.CTk):
         left_frame = ctk.CTkFrame(main_ped_frame, width=330)
         left_frame.pack(side="left", fill="y", padx=5, pady=5)
         
-        ctk.CTkLabel(left_frame, text="Nuevo Cliente", font=("Arial", 14, "bold")).pack(pady=5)
+        self.lbl_cli_title = ctk.CTkLabel(left_frame, text="Nuevo Cliente", font=("Arial", 14, "bold"))
+        self.lbl_cli_title.pack(pady=5)
+        
         self.cli_nombre = ctk.CTkEntry(left_frame, placeholder_text="Nombre del cliente *")
         self.cli_nombre.pack(pady=4, padx=10, fill="x")
         self.cli_tel = ctk.CTkEntry(left_frame, placeholder_text="Teléfono (opcional)")
@@ -354,8 +438,14 @@ class App3D(ctk.CTk):
         self.cli_dir = ctk.CTkEntry(left_frame, placeholder_text="Dirección de entrega (opcional)")
         self.cli_dir.pack(pady=4, padx=10, fill="x")
         
-        ctk.CTkButton(left_frame, text="Guardar Cliente", fg_color="blue", command=self.add_cliente).pack(pady=8, padx=10)
-        
+        cli_btn_box = ctk.CTkFrame(left_frame, fg_color="transparent")
+        cli_btn_box.pack(pady=8, padx=10, fill="x")
+
+        self.btn_save_cli = ctk.CTkButton(cli_btn_box, text="Guardar Cliente", fg_color="blue", command=self.add_cliente)
+        self.btn_save_cli.pack(side="left", fill="x", expand=True, padx=2)
+
+        self.btn_cancel_cli = ctk.CTkButton(cli_btn_box, text="X", width=30, fg_color="gray40", command=self.cancel_edit_cliente)
+
         ctk.CTkLabel(left_frame, text="Listado de Clientes:", font=("Arial", 12, "bold")).pack(pady=(10, 5))
         self.scroll_clientes = ctk.CTkScrollableFrame(left_frame, width=290, height=200)
         self.scroll_clientes.pack(pady=5, padx=5, fill="both", expand=True)
@@ -365,12 +455,12 @@ class App3D(ctk.CTk):
         right_frame = ctk.CTkFrame(main_ped_frame)
         right_frame.pack(side="right", fill="both", expand=True, padx=5, pady=5)
         
-        ctk.CTkLabel(right_frame, text="Registrar Nuevo Pedido", font=("Arial", 14, "bold")).pack(pady=5)
+        self.lbl_ped_title = ctk.CTkLabel(right_frame, text="Registrar Nuevo Pedido", font=("Arial", 14, "bold"))
+        self.lbl_ped_title.pack(pady=5)
         
         form_ped = ctk.CTkFrame(right_frame, fg_color="transparent")
         form_ped.pack(fill="x", padx=10, pady=5)
         
-        # 1. Buscador dinámico de cliente
         ctk.CTkLabel(form_ped, text="Buscar Cliente:").grid(row=0, column=0, sticky="w", pady=3)
         self.ped_cli_search = ctk.CTkEntry(form_ped, placeholder_text="Escribe nombre de cliente...")
         self.ped_cli_search.grid(row=0, column=1, sticky="ew", pady=3, padx=5)
@@ -382,55 +472,80 @@ class App3D(ctk.CTk):
         self.menu_ped_cli = ctk.CTkOptionMenu(form_ped, variable=self.ped_cli_var, values=clientes_list or ["Sin clientes"])
         self.menu_ped_cli.grid(row=1, column=1, sticky="ew", pady=3, padx=5)
 
-        # 2. Tienda de venta (Asociada al Pedido)
         ctk.CTkLabel(form_ped, text="Tienda de Venta:").grid(row=2, column=0, sticky="w", pady=3)
         self.ped_tienda_var = ctk.StringVar(value="Wallapop")
         self.menu_ped_tienda = ctk.CTkOptionMenu(form_ped, variable=self.ped_tienda_var, values=["Wallapop", "Etsy", "Otra / Directo"])
         self.menu_ped_tienda.grid(row=2, column=1, sticky="ew", pady=3, padx=5)
 
-        # 3. Proyecto del historial
         ctk.CTkLabel(form_ped, text="Impresión/Proyecto asociada:").grid(row=3, column=0, sticky="w", pady=3)
         hist_list = [f"[{h.get('fecha','')}] {h.get('nombre','Pieza')} ({h.get('coste_total',0):.2f}€)" for h in self.data["historial"]]
         self.ped_hist_var = ctk.StringVar(value=hist_list[0] if hist_list else "No hay historial")
         self.menu_ped_hist = ctk.CTkOptionMenu(form_ped, variable=self.ped_hist_var, values=hist_list or ["No hay historial"])
         self.menu_ped_hist.grid(row=3, column=1, sticky="ew", pady=3, padx=5)
+
+        ctk.CTkLabel(form_ped, text="Nº de Seguimiento (opcional):").grid(row=4, column=0, sticky="w", pady=3)
+        self.ped_seguimiento = ctk.CTkEntry(form_ped, placeholder_text="ej. PK123456789ES")
+        self.ped_seguimiento.grid(row=4, column=1, sticky="ew", pady=3, padx=5)
         
-        # 4. Precios
-        ctk.CTkLabel(form_ped, text="Precio venta producto (€):").grid(row=4, column=0, sticky="w", pady=3)
+        ctk.CTkLabel(form_ped, text="Precio venta producto (€):").grid(row=5, column=0, sticky="w", pady=3)
         self.ped_precio_prod = ctk.CTkEntry(form_ped, placeholder_text="0.00")
-        self.ped_precio_prod.grid(row=4, column=1, sticky="ew", pady=3, padx=5)
+        self.ped_precio_prod.grid(row=5, column=1, sticky="ew", pady=3, padx=5)
         self.ped_precio_prod.bind("<KeyRelease>", lambda e: self.calcular_total_pedido())
 
-        ctk.CTkLabel(form_ped, text="Gastos de Envío (€):").grid(row=5, column=0, sticky="w", pady=3)
+        ctk.CTkLabel(form_ped, text="Gastos de Envío (€):").grid(row=6, column=0, sticky="w", pady=3)
         self.ped_envio = ctk.CTkEntry(form_ped, placeholder_text="0.00")
         self.ped_envio.insert(0, "0.00")
-        self.ped_envio.grid(row=5, column=1, sticky="ew", pady=3, padx=5)
+        self.ped_envio.grid(row=6, column=1, sticky="ew", pady=3, padx=5)
         self.ped_envio.bind("<KeyRelease>", lambda e: self.calcular_total_pedido())
 
-        ctk.CTkLabel(form_ped, text="Total a Cobrar (€):", font=("Arial", 12, "bold")).grid(row=6, column=0, sticky="w", pady=5)
+        ctk.CTkLabel(form_ped, text="Total a Cobrar (€):", font=("Arial", 12, "bold")).grid(row=7, column=0, sticky="w", pady=5)
         self.lbl_ped_total = ctk.CTkLabel(form_ped, text="0.00 €", font=("Arial", 14, "bold"), text_color="lightgreen")
-        self.lbl_ped_total.grid(row=6, column=1, sticky="w", pady=5, padx=5)
+        self.lbl_ped_total.grid(row=7, column=1, sticky="w", pady=5, padx=5)
 
         form_ped.grid_columnconfigure(1, weight=1)
         
-        ctk.CTkButton(right_frame, text="Crear Pedido", fg_color="green", command=self.add_pedido).pack(pady=5)
-        
+        ped_btn_box = ctk.CTkFrame(right_frame, fg_color="transparent")
+        ped_btn_box.pack(pady=5)
+
+        self.btn_save_ped = ctk.CTkButton(ped_btn_box, text="Crear Pedido", fg_color="green", command=self.add_pedido)
+        self.btn_save_ped.pack(side="left", padx=5)
+
+        self.btn_cancel_ped = ctk.CTkButton(ped_btn_box, text="Cancelar Edición", fg_color="gray40", command=self.cancel_edit_pedido)
+
         ctk.CTkLabel(right_frame, text="Historial de Pedidos:", font=("Arial", 12, "bold")).pack(pady=(10, 2))
         self.scroll_pedidos = ctk.CTkScrollableFrame(right_frame, width=540, height=140)
         self.scroll_pedidos.pack(pady=5, padx=5, fill="both", expand=True)
         self.actualizar_vista_pedidos()
 
-    def filtrar_clientes_para_pedido(self, event=None):
-        filtro = self.ped_cli_search.get().strip().lower()
-        todos_clientes = list(self.data["clientes"].keys())
-        coincidencias = [c for c in todos_clientes if filtro in c.lower()] if filtro else todos_clientes
+    def edit_cliente(self, nombre):
+        info = self.data["clientes"][nombre]
+        self.editing_cliente_name = nombre
         
-        if coincidencias:
-            self.menu_ped_cli.configure(values=coincidencias)
-            self.ped_cli_var.set(coincidencias[0])
-        else:
-            self.menu_ped_cli.configure(values=["Sin coincidencias"])
-            self.ped_cli_var.set("Sin coincidencias")
+        self.cli_nombre.delete(0, 'end')
+        self.cli_nombre.insert(0, nombre)
+        
+        self.cli_tel.delete(0, 'end')
+        self.cli_tel.insert(0, info.get("telefono", ""))
+        
+        self.cli_email.delete(0, 'end')
+        self.cli_email.insert(0, info.get("email", ""))
+        
+        self.cli_dir.delete(0, 'end')
+        self.cli_dir.insert(0, info.get("direccion", ""))
+
+        self.lbl_cli_title.configure(text="Editar Cliente", text_color="orange")
+        self.btn_save_cli.configure(text="Guardar Cambios", fg_color="orange")
+        self.btn_cancel_cli.pack(side="right", padx=2)
+
+    def cancel_edit_cliente(self):
+        self.editing_cliente_name = None
+        self.cli_nombre.delete(0, 'end')
+        self.cli_tel.delete(0, 'end')
+        self.cli_email.delete(0, 'end')
+        self.cli_dir.delete(0, 'end')
+        self.lbl_cli_title.configure(text="Nuevo Cliente", text_color="white")
+        self.btn_save_cli.configure(text="Guardar Cliente", fg_color="blue")
+        self.btn_cancel_cli.pack_forget()
 
     def add_cliente(self):
         nombre = self.cli_nombre.get().strip()
@@ -438,21 +553,107 @@ class App3D(ctk.CTk):
         email = self.cli_email.get().strip()
         direccion = self.cli_dir.get().strip()
         if not nombre: return
-        
-        self.data["clientes"][nombre] = {
-            "telefono": tel,
-            "email": email,
-            "direccion": direccion
-        }
+
+        if self.editing_cliente_name:
+            old_name = self.editing_cliente_name
+            if old_name != nombre:
+                del self.data["clientes"][old_name]
+                # Actualización en cascada en Pedidos
+                for p in self.data["pedidos"]:
+                    if p.get("cliente") == old_name:
+                        p["cliente"] = nombre
+            self.data["clientes"][nombre] = {"telefono": tel, "email": email, "direccion": direccion}
+            self.cancel_edit_cliente()
+        else:
+            self.data["clientes"][nombre] = {"telefono": tel, "email": email, "direccion": direccion}
+            self.cancel_edit_cliente()
+
         self.save_data()
-        
-        self.cli_nombre.delete(0, 'end')
-        self.cli_tel.delete(0, 'end')
-        self.cli_email.delete(0, 'end')
-        self.cli_dir.delete(0, 'end')
-        
         self.actualizar_vista_clientes()
         self.actualizar_selectores_pedidos()
+        self.actualizar_vista_pedidos()
+
+    def edit_pedido(self, real_index):
+        p = self.data["pedidos"][real_index]
+        self.editing_pedido_index = real_index
+        
+        self.ped_cli_var.set(p.get('cliente', ''))
+        self.ped_tienda_var.set(p.get('tienda', 'Wallapop'))
+        self.ped_hist_var.set(p.get('impresion', ''))
+        
+        self.ped_seguimiento.delete(0, 'end')
+        self.ped_seguimiento.insert(0, p.get('seguimiento', ''))
+        
+        self.ped_precio_prod.delete(0, 'end')
+        self.ped_precio_prod.insert(0, str(p.get('precio_prod', 0.0)))
+        
+        self.ped_envio.delete(0, 'end')
+        self.ped_envio.insert(0, str(p.get('envio', 0.0)))
+        
+        self.calcular_total_pedido()
+
+        self.lbl_ped_title.configure(text="Editar Pedido", text_color="orange")
+        self.btn_save_ped.configure(text="Guardar Cambios en Pedido", fg_color="orange")
+        self.btn_cancel_ped.pack(side="right", padx=5)
+
+    def cancel_edit_pedido(self):
+        self.editing_pedido_index = None
+        self.ped_seguimiento.delete(0, 'end')
+        self.ped_precio_prod.delete(0, 'end')
+        self.ped_envio.delete(0, 'end')
+        self.ped_envio.insert(0, "0.00")
+        self.lbl_ped_total.configure(text="0.00 €")
+        self.lbl_ped_title.configure(text="Registrar Nuevo Pedido", text_color="white")
+        self.btn_save_ped.configure(text="Crear Pedido", fg_color="green")
+        self.btn_cancel_ped.pack_forget()
+
+    def add_pedido(self):
+        try:
+            cliente = self.ped_cli_var.get()
+            tienda = self.ped_tienda_var.get()
+            impresion_str = self.ped_hist_var.get()
+            seguimiento = self.ped_seguimiento.get().strip()
+            precio_prod = float(self.ped_precio_prod.get().strip().replace(',', '.') or 0.0)
+            envio = float(self.ped_envio.get().strip().replace(',', '.') or 0.0)
+            total = precio_prod + envio
+            
+            if not cliente or cliente in ["Sin clientes", "Sin coincidencias"] or not impresion_str or impresion_str == "No hay historial":
+                return
+
+            ped_data = {
+                "fecha": self.data["pedidos"][self.editing_pedido_index]["fecha"] if self.editing_pedido_index is not None else datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "cliente": cliente,
+                "tienda": tienda,
+                "impresion": impresion_str,
+                "seguimiento": seguimiento,
+                "precio_prod": precio_prod,
+                "envio": envio,
+                "total": total
+            }
+
+            if self.editing_pedido_index is not None:
+                self.data["pedidos"][self.editing_pedido_index] = ped_data
+                self.cancel_edit_pedido()
+            else:
+                self.data["pedidos"].append(ped_data)
+                self.cancel_edit_pedido()
+
+            self.save_data()
+            self.actualizar_vista_pedidos()
+            self.actualizar_vista_estadisticas()
+        except ValueError:
+            pass
+
+    def filtrar_clientes_para_pedido(self, event=None):
+        filtro = self.ped_cli_search.get().strip().lower()
+        todos_clientes = list(self.data["clientes"].keys())
+        coincidencias = [c for c in todos_clientes if filtro in c.lower()] if filtro else todos_clientes
+        if coincidencias:
+            self.menu_ped_cli.configure(values=coincidencias)
+            self.ped_cli_var.set(coincidencias[0])
+        else:
+            self.menu_ped_cli.configure(values=["Sin coincidencias"])
+            self.ped_cli_var.set("Sin coincidencias")
 
     def eliminar_cliente(self, nombre):
         if nombre in self.data["clientes"]:
@@ -468,55 +669,16 @@ class App3D(ctk.CTk):
             card.pack(pady=3, padx=2, fill="x", expand=True)
             detalles = f"Tel: {info.get('telefono','-')} | Dir: {info.get('direccion','-')}"
             ctk.CTkLabel(card, text=f"{cli}\n{detalles}", anchor="w", font=("Arial", 10)).pack(side="left", padx=5, pady=5, fill="x", expand=True)
-            ctk.CTkButton(card, text="X", width=30, fg_color="red", command=lambda c=cli: self.eliminar_cliente(c)).pack(side="right", padx=5)
+            ctk.CTkButton(card, text="✎", width=30, fg_color="orange", command=lambda c=cli: self.edit_cliente(c)).pack(side="right", padx=2)
+            ctk.CTkButton(card, text="X", width=30, fg_color="red", command=lambda c=cli: self.eliminar_cliente(c)).pack(side="right", padx=2)
 
     def calcular_total_pedido(self):
         try:
-            prod_str = self.ped_precio_prod.get().strip().replace(',', '.')
-            envio_str = self.ped_envio.get().strip().replace(',', '.')
-            prod = float(prod_str or 0.0)
-            envio = float(envio_str or 0.0)
-            total = prod + envio
-            self.lbl_ped_total.configure(text=f"{total:.2f} €")
+            prod = float(self.ped_precio_prod.get().strip().replace(',', '.') or 0.0)
+            envio = float(self.ped_envio.get().strip().replace(',', '.') or 0.0)
+            self.lbl_ped_total.configure(text=f"{prod + envio:.2f} €")
         except ValueError:
             self.lbl_ped_total.configure(text="Error en números")
-
-    def add_pedido(self):
-        try:
-            cliente = self.ped_cli_var.get()
-            tienda = self.ped_tienda_var.get()
-            impresion_str = self.ped_hist_var.get()
-            precio_prod_str = self.ped_precio_prod.get().strip().replace(',', '.')
-            envio_str = self.ped_envio.get().strip().replace(',', '.')
-            precio_prod = float(precio_prod_str or 0.0)
-            envio = float(envio_str or 0.0)
-            total = precio_prod + envio
-            
-            if not cliente or cliente in ["Sin clientes", "Sin coincidencias"] or not impresion_str or impresion_str == "No hay historial":
-                return
-
-            self.data["pedidos"].append({
-                "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "cliente": cliente,
-                "tienda": tienda,
-                "impresion": impresion_str,
-                "precio_prod": precio_prod,
-                "envio": envio,
-                "total": total
-            })
-            self.save_data()
-            self.actualizar_vista_pedidos()
-            self.actualizar_vista_estadisticas()
-            
-            self.ped_precio_prod.delete(0, 'end')
-            self.ped_envio.delete(0, 'end')
-            self.ped_envio.insert(0, "0.00")
-            self.lbl_ped_total.configure(text="0.00 €")
-            if hasattr(self, 'ped_cli_search'):
-                self.ped_cli_search.delete(0, 'end')
-                self.filtrar_clientes_para_pedido()
-        except ValueError:
-            pass
 
     def eliminar_pedido(self, index):
         del self.data["pedidos"][index]
@@ -531,30 +693,27 @@ class App3D(ctk.CTk):
             card = ctk.CTkFrame(self.scroll_pedidos)
             card.pack(pady=4, padx=5, fill="x", expand=True)
             tienda = p.get('tienda', 'Wallapop')
-            info = f"{p['fecha']} | [{tienda}] Cliente: {p['cliente']} | Total: {p['total']:.2f}€ (Venta: {p['precio_prod']:.2f}€ + Envío: {p['envio']:.2f}€)\nRef: {p['impresion']}"
+            track_str = f" | Track: {p.get('seguimiento')}" if p.get('seguimiento') else ""
+            info = f"{p['fecha']} | [{tienda}] Cliente: {p['cliente']}{track_str} | Total: {p['total']:.2f}€ (Venta: {p['precio_prod']:.2f}€ + Envío: {p['envio']:.2f}€)\nRef: {p['impresion']}"
             ctk.CTkLabel(card, text=info, anchor="w", font=("Arial", 11)).pack(side="left", padx=10, pady=5, fill="x", expand=True)
-            ctk.CTkButton(card, text="Borrar", width=60, fg_color="red", command=lambda idx=real_index: self.eliminar_pedido(idx)).pack(side="right", padx=10)
+            ctk.CTkButton(card, text="✎", width=35, fg_color="orange", command=lambda idx=real_index: self.edit_pedido(idx)).pack(side="right", padx=2)
+            ctk.CTkButton(card, text="Borrar", width=55, fg_color="red", command=lambda idx=real_index: self.eliminar_pedido(idx)).pack(side="right", padx=2)
 
     def actualizar_selectores_pedidos(self):
         clientes_list = list(self.data["clientes"].keys())
         self.menu_ped_cli.configure(values=clientes_list or ["Sin clientes"])
-        if clientes_list: self.ped_cli_var.set(clientes_list[0])
-        else: self.ped_cli_var.set("Sin clientes")
+        if clientes_list and self.ped_cli_var.get() not in clientes_list: self.ped_cli_var.set(clientes_list[0])
 
         hist_list = [f"[{h.get('fecha','')}] {h.get('nombre','Pieza')} ({h.get('coste_total',0):.2f}€)" for h in self.data["historial"]]
         self.menu_ped_hist.configure(values=hist_list or ["No hay historial"])
-        if hist_list: self.ped_hist_var.set(hist_list[0])
-        else: self.ped_hist_var.set("No hay historial")
+        if hist_list and self.ped_hist_var.get() not in hist_list: self.ped_hist_var.set(hist_list[0])
 
     # --- PESTAÑA: ESTADÍSTICAS ---
     def build_estadisticas(self):
         ctk.CTkLabel(self.tab_stats, text="Balance Económico y Estadísticas", font=("Arial", 20, "bold")).pack(pady=15)
-        
         self.stats_frame = ctk.CTkFrame(self.tab_stats, fg_color="transparent")
         self.stats_frame.pack(fill="both", expand=True, padx=20, pady=10)
-        
         ctk.CTkButton(self.tab_stats, text="Actualizar Datos", fg_color="blue", command=self.actualizar_vista_estadisticas).pack(pady=10)
-        
         self.actualizar_vista_estadisticas()
 
     def actualizar_vista_estadisticas(self):
@@ -630,7 +789,6 @@ class App3D(ctk.CTk):
         cfg = self.data["config"]
         
         ctk.CTkLabel(self.tab_conf, text="Ajustes de Costes y Consumo", font=("Arial", 20, "bold")).pack(pady=10)
-        
         scroll_conf = ctk.CTkScrollableFrame(self.tab_conf, width=500, height=550)
         scroll_conf.pack(pady=5, padx=10, fill="both", expand=True)
 
@@ -695,7 +853,20 @@ class App3D(ctk.CTk):
             card.pack(pady=4, padx=5, fill="x", expand=True)
             info_text = f"[{v['tipo']}] {v['marca']} | Color: {v['color']} ({acabado}) | Quedan: {v['restante']:.1f}g / {v['peso_inicial']}g | Precio: {v['precio']}€"
             ctk.CTkLabel(card, text=info_text, anchor="w", font=("Arial", 12)).pack(side="left", padx=10, pady=8, fill="x", expand=True)
-            ctk.CTkButton(card, text="Borrar", width=70, fg_color="red", hover_color="darkred", command=lambda id_f=k: self.eliminar_filamento(id_f)).pack(side="right", padx=10, pady=5)
+            
+            # Ajuste rápido de peso directamente desde la tarjeta
+            adj_frame = ctk.CTkFrame(card, fg_color="transparent")
+            adj_frame.pack(side="right", padx=5)
+            
+            entry_adj = ctk.CTkEntry(adj_frame, placeholder_text="Ajustar (g)", width=80)
+            entry_adj.pack(side="left", padx=2)
+            
+            btn_adj = ctk.CTkButton(adj_frame, text="Ajustar", width=55, fg_color="gray30", hover_color="gray40", 
+                                    command=lambda id_f=k, e=entry_adj: self.ajustar_gramos_rapido(id_f, e))
+            btn_adj.pack(side="left", padx=2)
+
+            ctk.CTkButton(card, text="✎", width=35, fg_color="orange", command=lambda id_f=k: self.edit_filamento(id_f)).pack(side="right", padx=2, pady=5)
+            ctk.CTkButton(card, text="Borrar", width=60, fg_color="red", hover_color="darkred", command=lambda id_f=k: self.eliminar_filamento(id_f)).pack(side="right", padx=2, pady=5)
 
     def actualizar_vista_historial(self):
         for widget in self.scroll_hist.winfo_children(): widget.destroy()
@@ -719,7 +890,6 @@ class App3D(ctk.CTk):
 
     def eliminar_historial(self, index):
         h = self.data["historial"][index]
-        
         desglose = h.get('desglose_filamentos', [])
         if desglose:
             for item in desglose:
